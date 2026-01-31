@@ -1,60 +1,57 @@
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using UserManagementAPI.Models;
 
 namespace UserManagementAPI.Stores;
 
-public static class InMemoryUserStore
+public class InMemoryUserStore : IUserStore
 {
-    private static readonly List<User> _users = new();
-    private static int _nextId = 1;
-    private static readonly object _lock = new();
+    private readonly ConcurrentDictionary<int, User> _users = new();
+    private int _nextId = 0;
 
-    public static IEnumerable<User> GetAll()
+    public Task<IEnumerable<User>> GetAllAsync(int page, int size)
     {
-        lock (_lock)
-        {
-            return _users.ToList();
-        }
+        if (page < 1) page = 1;
+        if (size < 1) size = 100;
+        const int maxSize = 1000;
+        if (size > maxSize) size = maxSize;
+
+        var skip = (page - 1) * size;
+        var snapshot = _users.Values
+            .OrderBy(u => u.Id)
+            .Skip(skip)
+            .Take(size)
+            .ToArray();
+
+        return Task.FromResult<IEnumerable<User>>(snapshot);
     }
 
-    public static User? Get(int id)
+    public Task<User?> GetAsync(int id)
     {
-        lock (_lock)
-        {
-            return _users.FirstOrDefault(u => u.Id == id);
-        }
+        return Task.FromResult(_users.TryGetValue(id, out var u) ? u : null);
     }
 
-    public static User Add(string name, string? email)
+    public Task<User> AddAsync(string name, string? email)
     {
-        lock (_lock)
-        {
-            var user = new User(_nextId++, name, email);
-            _users.Add(user);
-            return user;
-        }
+        var id = Interlocked.Increment(ref _nextId);
+        var user = new User(id, name, email);
+        _users[id] = user;
+        return Task.FromResult(user);
     }
 
-    public static bool Update(int id, string name, string? email)
+    public Task<bool> UpdateAsync(int id, string name, string? email)
     {
-        lock (_lock)
-        {
-            var idx = _users.FindIndex(u => u.Id == id);
-            if (idx == -1) return false;
-            _users[idx] = new User(id, name, email);
-            return true;
-        }
+        if (!_users.TryGetValue(id, out var existing)) return Task.FromResult(false);
+        var updated = new User(id, name, email);
+        var result = _users.TryUpdate(id, updated, existing);
+        return Task.FromResult(result);
     }
 
-    public static bool Delete(int id)
+    public Task<bool> DeleteAsync(int id)
     {
-        lock (_lock)
-        {
-            var idx = _users.FindIndex(u => u.Id == id);
-            if (idx == -1) return false;
-            _users.RemoveAt(idx);
-            return true;
-        }
+        return Task.FromResult(_users.TryRemove(id, out _));
     }
 }

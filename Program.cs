@@ -1,12 +1,13 @@
+using System.ComponentModel.DataAnnotations;
 using UserManagementAPI.Models;
 using UserManagementAPI.Stores;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
-// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+builder.Services.AddSingleton<IUserStore, InMemoryUserStore>();
 
 var app = builder.Build();
 
@@ -19,40 +20,98 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
-app.MapGet("/users", () => Results.Ok(InMemoryUserStore.GetAll()))
+app.MapGet("/users", async (int? page, int? size, IUserStore store, ILogger<Program> log) =>
+{
+    try
+    {
+        var p = page.GetValueOrDefault(1);
+        var s = size.GetValueOrDefault(100);
+        var users = await store.GetAllAsync(p, s);
+        return Results.Ok(users);
+    }
+    catch (Exception ex)
+    {
+        log.LogError(ex, "Failed to get users");
+        return Results.Problem("Internal server error");
+    }
+})
     .WithName("GetUsers")
     .WithOpenApi();
 
-app.MapGet("/users/{id:int}", (int id) =>
+app.MapGet("/users/{id:int}", async (int id, IUserStore store, ILogger<Program> log) =>
 {
-    var user = InMemoryUserStore.Get(id);
-    return user is not null ? Results.Ok(user) : Results.NotFound();
+    try
+    {
+        var user = await store.GetAsync(id);
+        return user is not null ? Results.Ok(user) : Results.NotFound();
+    }
+    catch (Exception ex)
+    {
+        log.LogError(ex, "Failed to get user {Id}", id);
+        return Results.Problem("Internal server error");
+    }
 })
     .WithName("GetUserById")
     .WithOpenApi();
 
-app.MapPost("/users", (CreateUserRequest req) =>
+app.MapPost("/users", async (CreateUserRequest req, IUserStore store, ILogger<Program> log) =>
 {
+    if (req is null) return Results.BadRequest(new { Error = "Request body is required" });
     if (string.IsNullOrWhiteSpace(req.Name)) return Results.BadRequest(new { Error = "Name is required" });
-    var created = InMemoryUserStore.Add(req.Name, req.Email);
-    return Results.Created($"/users/{created.Id}", created);
+    if (!string.IsNullOrWhiteSpace(req.Email) && !new EmailAddressAttribute().IsValid(req.Email))
+    {
+        return Results.BadRequest(new { Error = "Email is invalid" });
+    }
+
+    try
+    {
+        var created = await store.AddAsync(req.Name, req.Email);
+        return Results.Created($"/users/{created.Id}", created);
+    }
+    catch (Exception ex)
+    {
+        log.LogError(ex, "Failed to create user");
+        return Results.Problem("Internal server error");
+    }
 })
     .WithName("CreateUser")
     .WithOpenApi();
 
-app.MapPut("/users/{id:int}", (int id, CreateUserRequest req) =>
+app.MapPut("/users/{id:int}", async (int id, CreateUserRequest req, IUserStore store, ILogger<Program> log) =>
 {
+    if (req is null) return Results.BadRequest(new { Error = "Request body is required" });
     if (string.IsNullOrWhiteSpace(req.Name)) return Results.BadRequest(new { Error = "Name is required" });
-    var updated = InMemoryUserStore.Update(id, req.Name, req.Email);
-    return updated ? Results.NoContent() : Results.NotFound();
+    if (!string.IsNullOrWhiteSpace(req.Email) && !new EmailAddressAttribute().IsValid(req.Email))
+    {
+        return Results.BadRequest(new { Error = "Email is invalid" });
+    }
+
+    try
+    {
+        var updated = await store.UpdateAsync(id, req.Name, req.Email);
+        return updated ? Results.NoContent() : Results.NotFound();
+    }
+    catch (Exception ex)
+    {
+        log.LogError(ex, "Failed to update user {Id}", id);
+        return Results.Problem("Internal server error");
+    }
 })
     .WithName("UpdateUser")
     .WithOpenApi();
 
-app.MapDelete("/users/{id:int}", (int id) =>
+app.MapDelete("/users/{id:int}", async (int id, IUserStore store, ILogger<Program> log) =>
 {
-    var deleted = InMemoryUserStore.Delete(id);
-    return deleted ? Results.NoContent() : Results.NotFound();
+    try
+    {
+        var deleted = await store.DeleteAsync(id);
+        return deleted ? Results.NoContent() : Results.NotFound();
+    }
+    catch (Exception ex)
+    {
+        log.LogError(ex, "Failed to delete user {Id}", id);
+        return Results.Problem("Internal server error");
+    }
 })
     .WithName("DeleteUser")
     .WithOpenApi();
