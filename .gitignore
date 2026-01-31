@@ -1,0 +1,34 @@
+# Build results
+bin/
+obj/
+dist/
+
+# IDEs
+.vs/
+.vscode/
+.idea/
+*.swp
+*.swo
+*.user
+*.userprefs
+
+# NuGet
+packages/
+.nuget/
+nuget.exe
+*.nupkg
+
+# Build artifacts
+*.dll
+*.exe
+*.pdb
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Dependencies
+node_modules/
+
+# Logs
+*.log
