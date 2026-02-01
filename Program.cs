@@ -12,6 +12,8 @@ builder.Services.AddSingleton<IUserStore, InMemoryUserStore>();
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
+app.UseMiddleware<LoggingMiddleware>();
+
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -117,3 +119,51 @@ app.MapDelete("/users/{id:int}", async (int id, IUserStore store, ILogger<Progra
     .WithOpenApi();
 
 app.Run();
+
+// Logging middleware
+public class LoggingMiddleware
+{
+    private readonly RequestDelegate _next;
+    private readonly ILogger<LoggingMiddleware> _logger;
+
+    public LoggingMiddleware(RequestDelegate next, ILogger<LoggingMiddleware> logger)
+    {
+        _next = next;
+        _logger = logger;
+    }
+
+    public async Task InvokeAsync(HttpContext context)
+    {
+        var method = context.Request.Method;
+        var path = context.Request.Path;
+        var startTime = DateTime.UtcNow;
+
+        try
+        {
+            await _next(context);
+
+            var statusCode = context.Response.StatusCode;
+            var duration = DateTime.UtcNow - startTime;
+
+            _logger.LogInformation(
+                "HTTP {Method} {Path} returned {StatusCode} in {DurationMs}ms",
+                method,
+                path,
+                statusCode,
+                duration.TotalMilliseconds
+            );
+        }
+        catch (Exception ex)
+        {
+            var duration = DateTime.UtcNow - startTime;
+            _logger.LogError(
+                ex,
+                "HTTP {Method} {Path} failed with exception after {DurationMs}ms",
+                method,
+                path,
+                duration.TotalMilliseconds
+            );
+            throw;
+        }
+    }
+}
