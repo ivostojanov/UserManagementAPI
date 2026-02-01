@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using Microsoft.OpenApi.Models;
 using UserManagementAPI.Models;
 using UserManagementAPI.Stores;
 
@@ -6,13 +7,37 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Type = SecuritySchemeType.Http,
+        Scheme = "bearer",
+        Description = "Enter just the token value (without 'Bearer' prefix). Example: token_demo123"
+    });
+
+    options.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference
+                {
+                    Type = ReferenceType.SecurityScheme,
+                    Id = "Bearer"
+                }
+            },
+            new string[] { }
+        }
+    });
+});
 builder.Services.AddSingleton<IUserStore, InMemoryUserStore>();
 
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
 app.UseMiddleware<ErrorHandlingMiddleware>();
+app.UseMiddleware<AuthenticationMiddleware>();
 app.UseMiddleware<LoggingMiddleware>();
 
 if (app.Environment.IsDevelopment())
@@ -119,9 +144,104 @@ app.MapDelete("/users/{id:int}", async (int id, IUserStore store, ILogger<Progra
     .WithName("DeleteUser")
     .WithOpenApi();
 
+// Login endpoint - generates a valid token
+app.MapPost("/auth/login", (ILogger<Program> log) =>
+{
+    var token = "token_" + Guid.NewGuid().ToString().Substring(0, 8);
+    TokenStore.AddToken(token);
+    log.LogInformation("User logged in, token: {Token}", token);
+    return Results.Ok(new { token, message = "Use this token in the Authorization header or Swagger Authorize dialog" });
+})
+    .WithName("Login")
+    .WithOpenApi();
+
 app.Run();
 
-// Error-handling middleware
+// Token store - in-memory storage of valid tokens
+public static class TokenStore
+{
+    private static readonly HashSet<string> ValidTokens = new()
+    {
+        "token_demo123",
+        "token_test456",
+        "token_admin789"
+    };
+
+    public static void AddToken(string token)
+    {
+        ValidTokens.Add(token);
+    }
+
+    public static bool IsValidToken(string token)
+    {
+        return ValidTokens.Contains(token);
+    }
+}
+
+// Authentication middleware
+public class AuthenticationMiddleware
+{
+    private readonly RequestDelegate _next;
+    private readonly ILogger<AuthenticationMiddleware> _logger;
+    private static readonly string[] PublicPaths = { "/swagger", "/auth/login", "/health" };
+
+    public AuthenticationMiddleware(RequestDelegate next, ILogger<AuthenticationMiddleware> logger)
+    {
+        _next = next;
+        _logger = logger;
+    }
+
+    public async Task InvokeAsync(HttpContext context)
+    {
+        // Skip authentication for public endpoints
+        var path = context.Request.Path.Value;
+        if (PublicPaths.Any(p => path.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
+        {
+            await _next(context);
+            return;
+        }
+
+        // Extract token from Authorization header
+        var authHeader = context.Request.Headers["Authorization"].ToString();
+        if (string.IsNullOrEmpty(authHeader))
+        {
+            _logger.LogWarning("Request to {Path} missing Authorization header", path);
+            await HandleUnauthorizedAsync(context);
+            return;
+        }
+
+        // Extract token - handle both "Bearer token" and plain "token" formats
+        var token = authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+            ? authHeader.Substring("Bearer ".Length).Trim()
+            : authHeader.Trim();
+
+        if (!TokenStore.IsValidToken(token))
+        {
+            _logger.LogWarning("Request to {Path} with invalid token: {Token}", path, token);
+            await HandleUnauthorizedAsync(context);
+            return;
+        }
+
+        // Attach user context to HttpContext.Items for downstream use
+        context.Items["User"] = new { Token = token, AuthenticatedAt = DateTime.UtcNow };
+        _logger.LogInformation("Request to {Path} authenticated successfully", path);
+        await _next(context);
+    }
+
+    private static Task HandleUnauthorizedAsync(HttpContext context)
+    {
+        context.Response.ContentType = "application/json";
+        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+
+        var response = new
+        {
+            error = "Unauthorized",
+            message = "Invalid or missing token. Use /auth/login to get a valid token."
+        };
+
+        return context.Response.WriteAsJsonAsync(response);
+    }
+}
 public class ErrorHandlingMiddleware
 {
     private readonly RequestDelegate _next;
