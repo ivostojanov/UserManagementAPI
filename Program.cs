@@ -12,6 +12,7 @@ builder.Services.AddSingleton<IUserStore, InMemoryUserStore>();
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
+app.UseMiddleware<ErrorHandlingMiddleware>();
 app.UseMiddleware<LoggingMiddleware>();
 
 if (app.Environment.IsDevelopment())
@@ -119,6 +120,46 @@ app.MapDelete("/users/{id:int}", async (int id, IUserStore store, ILogger<Progra
     .WithOpenApi();
 
 app.Run();
+
+// Error-handling middleware
+public class ErrorHandlingMiddleware
+{
+    private readonly RequestDelegate _next;
+    private readonly ILogger<ErrorHandlingMiddleware> _logger;
+
+    public ErrorHandlingMiddleware(RequestDelegate next, ILogger<ErrorHandlingMiddleware> logger)
+    {
+        _next = next;
+        _logger = logger;
+    }
+
+    public async Task InvokeAsync(HttpContext context)
+    {
+        try
+        {
+            await _next(context);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "An unhandled exception occurred");
+            await HandleExceptionAsync(context, ex);
+        }
+    }
+
+    private static Task HandleExceptionAsync(HttpContext context, Exception exception)
+    {
+        context.Response.ContentType = "application/json";
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+
+        var response = new
+        {
+            error = "Internal server error",
+            message = exception.Message
+        };
+
+        return context.Response.WriteAsJsonAsync(response);
+    }
+}
 
 // Logging middleware
 public class LoggingMiddleware
